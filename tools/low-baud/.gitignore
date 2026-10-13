@@ -1,0 +1,4 @@
+# Built firmware, build trees and the fetched viewer copy
+/firmware/
+/build/
+/viewer/

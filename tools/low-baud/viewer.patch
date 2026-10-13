@@ -1,0 +1,45 @@
+--- upstream/radio.js
++++ local/radio.js
+@@ -1,4 +1,7 @@
+ 'use strict';
++// Local USB-UART build: select the matching boot baud with ?baud=115200.
++const LOCAL_UART_BAUD=Number(new URLSearchParams(location.search).get('baud')||115200);
++if(![115200,230400,460800,921600,1000000,2000000].includes(LOCAL_UART_BAUD))throw Error('Unsupported local UART baud');
+ // Direct Web Serial driver. No network requests or server-side processing.
+ const CRC_TABLE=Uint32Array.from({length:256},(_,i)=>{let c=i;for(let k=0;k<8;k++)c=c&1?0xedb88320^(c>>>1):c>>>1;return c>>>0;});
+ function crc32(bytes){let c=0xffffffff;for(const b of bytes)c=CRC_TABLE[(c^b)&255]^(c>>>8);return (c^0xffffffff)>>>0;}
+@@ -75,7 +78,7 @@
+   :{status:'current',message:''};
+ }
+ class BurstSerialRadio {
+- constructor(){this.maxSamples=16380;this.captureSamples=null;this.droppedCaptures=0;this.spectrumCrcErrors=0;this.baudRate=2000000;this.transport=null;this.supportsBaudChange=false;this.changingBaud=false;this.hasGpio=false;this.gpioPins=[];this.firmwareVersion=null;this.gainMin=0;this.gainMax=0;this.gainStep=1;this.bandwidthRange=null;this.sampleBits=[8,10];this.family="C5";this.hasExtendedTune=false;this.tuneRange=null;this.rxRates=[80000000,40000000,20000000,10000000,8000000,4000000];this.port=null;this.queue=[];this.queued=0;this.wake=null;this.reader=null;this.writer=null;this.failed=null;this.tail=Promise.resolve();this.sequence=0;this.last=null;this.frequency=null;this.filter=null;this.analogFilter=null;this.bandwidth=null;this.gainSetting=null;}
++ constructor(){this.maxSamples=16380;this.captureSamples=null;this.droppedCaptures=0;this.spectrumCrcErrors=0;this.baudRate=LOCAL_UART_BAUD;this.transport=null;this.supportsBaudChange=false;this.changingBaud=false;this.hasGpio=false;this.gpioPins=[];this.firmwareVersion=null;this.gainMin=0;this.gainMax=0;this.gainStep=1;this.bandwidthRange=null;this.sampleBits=[8,10];this.family="C5";this.hasExtendedTune=false;this.tuneRange=null;this.rxRates=[80000000,40000000,20000000,10000000,8000000,4000000];this.port=null;this.queue=[];this.queued=0;this.wake=null;this.reader=null;this.writer=null;this.failed=null;this.tail=Promise.resolve();this.sequence=0;this.last=null;this.frequency=null;this.filter=null;this.analogFilter=null;this.bandwidth=null;this.gainSetting=null;}
+  run(f){const p=this.tail.then(f);this.tail=p.catch(()=>{});return p;}
+  async pump(){try{for(;;){const {value,done}=await this.reader.read();if(done)break;if(value){this.queue.push(value);this.queued+=value.length;if(this.lossy&&this.queued>1048576){while(this.queued>262144){const b=this.queue.shift();this.queued-=b.length;this.hostDropped+=b.length;}}if(this.queued>2*1024*1024)throw Error('Serial receive queue overflow');if(this.wake)this.wake();}}}catch(e){this.failed=e;}finally{this.failed ||= Error('Device disconnected');if(this.wake)this.wake();}}
+  async read(n,deadline=performance.now()+5000,idleMs=Infinity){let idleDeadline=performance.now()+idleMs;const out=new Uint8Array(n);let offset=0;while(offset<n){if(this.queued){const b=this.queue[0],k=Math.min(n-offset,b.length);out.set(b.subarray(0,k),offset);offset+=k;this.queued-=k;idleDeadline=performance.now()+idleMs;if(k===b.length)this.queue.shift();else this.queue[0]=b.subarray(k);continue;}if(this.failed)throw this.failed;const ms=Math.min(deadline,idleDeadline)-performance.now();if(ms<=0)throw Object.assign(Error('Serial response timed out'),{code:'SERIAL_TIMEOUT'});await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.wake=null;reject(Object.assign(Error('Serial response timed out'),{code:'SERIAL_TIMEOUT'}));},ms);this.wake=()=>{clearTimeout(timer);this.wake=null;resolve();};});}return out;}
+@@ -106,6 +109,7 @@
+   await this.port.setSignals({dataTerminalReady:false,requestToSend:true});
+   try{await new Promise(resolve=>setTimeout(resolve,100));}
+   finally{await this.port.setSignals({dataTerminalReady:false,requestToSend:false});}
++  await new Promise(resolve=>setTimeout(resolve,4000));
+  }
+  async openPort(port,baudRate){
+   this.port=port;
+@@ -122,7 +126,7 @@
+  async connectPort(port,baudRate,reset=true){
+   // Only an initial connection resets the board. A baud switch must preserve
+   // the running firmware and its volatile UART rate.
+-  const rates=port.getInfo?.().usbVendorId===0x303a?[baudRate]:[...new Set([baudRate,2000000,1000000])];
++  const rates=[baudRate];
+   let failure;
+   for(const rate of rates){
+    try{
+@@ -140,7 +144,7 @@
+   }
+   throw failure;
+  }
+- async connect({baudRate=2000000,port=null}={}){
++ async connect({baudRate=LOCAL_UART_BAUD,port=null}={}){
+   if(!port&&!SerialConnection.supported())throw Error('WebSerial or WebUSB support is required in this browser.');
+   if(!isSecureContext)throw Error('Serve this page over HTTPS or localhost.');
+   if(!port)port=await SerialConnection.requestPort();
